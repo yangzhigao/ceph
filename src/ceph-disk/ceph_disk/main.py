@@ -1081,6 +1081,7 @@ def allocate_osd_id(
     fsid,
     keyring,
     path,
+    crush_device_class=None,
 ):
     """
     Allocates an OSD id on the given cluster.
@@ -1101,7 +1102,7 @@ def allocate_osd_id(
         return osd_id
 
     LOG.debug('Allocating OSD id...')
-    secrets = Secrets()
+    secrets = Secrets(crush_device_class=crush_device_class)
     try:
         wanttobe = read_one_line(path, 'wanttobe')
         if os.path.exists(os.path.join(path, 'wanttobe')):
@@ -2646,13 +2647,15 @@ class CryptHelpers(object):
 
 class Secrets(object):
 
-    def __init__(self):
+    def __init__(self, crush_device_class=None):
         secret, stderr, ret = command(['ceph-authtool', '--gen-print-key'])
         LOG.debug("stderr " + stderr)
         assert ret == 0
         self.keys = {
             'cephx_secret': secret.strip(),
         }
+        if crush_device_class:
+            self.keys['crush_device_class'] = crush_device_class
 
     def write_osd_keyring(self, keyring, osd_id):
         command_check_call(
@@ -2670,8 +2673,8 @@ class Secrets(object):
 
 class LockboxSecrets(Secrets):
 
-    def __init__(self, args):
-        super(LockboxSecrets, self).__init__()
+    def __init__(self, args, crush_device_class=None):
+        super(LockboxSecrets, self).__init__(crush_device_class=crush_device_class)
 
         key_size = CryptHelpers.get_dmcrypt_keysize(args)
         key = open('/dev/urandom', 'rb').read(key_size / 8)
@@ -2755,7 +2758,7 @@ class Lockbox(object):
         bootstrap = self.args.prepare_key_template.format(cluster=cluster,
                                                           statedir=STATEDIR)
         path = self.get_mount_point()
-        secrets = LockboxSecrets(self.args)
+        secrets = LockboxSecrets(self.args, crush_device_class=self.args.crush_device_class)
         id_arg = self.args.osd_id and [self.args.osd_id] or []
         osd_id = command_with_stdin(
             [
@@ -2935,9 +2938,6 @@ class PrepareData(object):
         write_one_line(path, 'fsid', self.args.osd_uuid)
         if self.args.osd_id:
             write_one_line(path, 'wanttobe', self.args.osd_id)
-        if self.args.crush_device_class:
-            write_one_line(path, 'crush_device_class',
-                           self.args.crush_device_class)
         write_one_line(path, 'magic', CEPH_OSD_ONDISK_MAGIC)
 
         for to_prepare in to_prepare_list:
@@ -3490,6 +3490,7 @@ def mount_activate(
     dmcrypt,
     dmcrypt_key_dir,
     reactivate=False,
+    crush_device_class=None,
 ):
 
     if dmcrypt:
@@ -3532,7 +3533,7 @@ def mount_activate(
     osd_id = None
     cluster = None
     try:
-        (osd_id, cluster) = activate(path, activate_key_template, init)
+        (osd_id, cluster) = activate(path, activate_key_template, init, crush_device_class=crush_device_class)
 
         # Now active successfully
         # If we got reactivate and deactive, remove the deactive file
@@ -3596,6 +3597,7 @@ def activate_dir(
     path,
     activate_key_template,
     init,
+    crush_device_class=None,
 ):
 
     if not os.path.exists(path):
@@ -3603,7 +3605,7 @@ def activate_dir(
             'directory %s does not exist' % path
         )
 
-    (osd_id, cluster) = activate(path, activate_key_template, init)
+    (osd_id, cluster) = activate(path, activate_key_template, init, crush_device_class=crush_device_class)
 
     if init not in (None, 'none'):
         canonical = (STATEDIR + '/osd/{cluster}-{osd_id}').format(
@@ -3667,6 +3669,7 @@ def activate(
     path,
     activate_key_template,
     init,
+    crush_device_class=None,
 ):
 
     check_osd_magic(path)
@@ -3697,6 +3700,7 @@ def activate(
             fsid=fsid,
             keyring=keyring,
             path=path,
+            crush_device_class=crush_device_class,
         )
         write_one_line(path, 'whoami', osd_id)
     LOG.debug('OSD id is %s', osd_id)
@@ -3770,6 +3774,7 @@ def main_activate(args):
                 dmcrypt=args.dmcrypt,
                 dmcrypt_key_dir=args.dmcrypt_key_dir,
                 reactivate=args.reactivate,
+                crush_device_class=args.crush_device_class,
             )
             osd_data = get_mount_point(cluster, osd_id)
 
@@ -3792,6 +3797,7 @@ def main_activate(args):
                 path=args.path,
                 activate_key_template=args.activate_key_template,
                 init=args.mark_init,
+                crush_device_class=args.crush_device_class,
             )
             osd_data = args.path
 
@@ -4171,6 +4177,7 @@ def main_activate_space(name, args):
             dmcrypt=args.dmcrypt,
             dmcrypt_key_dir=args.dmcrypt_key_dir,
             reactivate=args.reactivate,
+            crush_device_class=args.crush_device_class,
         )
 
         start_daemon(
@@ -4214,6 +4221,7 @@ def main_activate_all(args):
                         init=args.mark_init,
                         dmcrypt=False,
                         dmcrypt_key_dir='',
+                        crush_device_class=args.crush_device_class,
                     )
                     start_daemon(
                         cluster=cluster,
